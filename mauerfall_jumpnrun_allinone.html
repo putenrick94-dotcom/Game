@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mauerfall Jump’n’Run – All‑in‑One (Minimal • Classic • Story)</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; padding:0; background:#0b0f14; color:#eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif; }
+  header { position: fixed; inset: 0 0 auto 0; display:flex; gap:12px; align-items:center; padding:10px 12px; background: linear-gradient(180deg, rgba(10,12,16,.85), rgba(10,12,16,.35)); border-bottom:1px solid #1e2530; backdrop-filter: blur(6px); z-index:3; }
+  header h1 { font-size:14px; margin:0 8px 0 0; opacity:.9; }
+  select, button { background:#141a22; border:1px solid #2a3442; color:#eaeaea; border-radius:8px; padding:8px 10px; font-size:13px; }
+  button:hover, select:hover { border-color:#415268; }
+  #meta { margin-left:auto; font-size:12px; opacity:.85; }
+  #container { position: fixed; inset: 48px 0 0 0; }
+  canvas { width:100vw; height:calc(100vh - 48px); display:block; image-rendering: pixelated; }
+  #sidepanel { position: fixed; right:10px; top:60px; background:#11151c; border:1px solid #2a3442; border-radius:10px; padding:10px 12px; max-width:420px; z-index:2; }
+  #sidepanel h2 { font-size:14px; margin:.2rem 0 .4rem; }
+  #sidepanel p { margin:.3rem 0; font-size:13px; line-height:1.35; }
+  #sidepanel kbd { background:#1a2230; border:1px solid #324258; border-radius:4px; padding:0 6px; }
+  #toast { position:fixed; left:50%; transform:translateX(-50%); bottom:14px; background:#141a22; border:1px solid #2a3442; border-radius:8px; padding:8px 10px; font-size:13px; display:none; z-index:4; }
+  a.inline { color:#8ecbff; text-decoration: none; border-bottom: 1px dotted #8ecbff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mauerfall Jump’n’Run – All‑in‑One</h1>
+  <label for="mode" style="font-size:13px;">Modus:</label>
+  <select id="mode" aria-label="Spielmodus wählen">
+    <option value="minimal">Minimal – 10 Ballons → Durchbruch</option>
+    <option value="classic">Classic – Scroller, Visa, Patrouillen</option>
+    <option value="story">Story – Timeline, Banner, Tor</option>
+  </select>
+  <button id="restart">Neu starten</button>
+  <div id="meta">Steuerung: ← → laufen • Leertaste springen • R Reset</div>
+</header>
+<div id="container"><canvas id="game" width="1024" height="576" aria-label="Mauerfall Jump and Run"></canvas></div>
+<div id="sidepanel" role="note" aria-live="polite"></div>
+<div id="toast" aria-live="polite"></div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const side = document.getElementById('sidepanel');
+  const toastEl = document.getElementById('toast');
+  const modeSel = document.getElementById('mode');
+  const restartBtn = document.getElementById('restart');
+
+  let current = null; // { loopId, destroy() }
+
+  function showToast(t, frames=110){
+    toastEl.textContent=t; toastEl.style.display='block';
+    let c=frames; (function tick(){
+      c--; if (c<=0) { toastEl.style.display='none'; }
+      else requestAnimationFrame(tick);
+    })();
+  }
+
+  // ---- Utilities shared by games
+  function rectsIntersect(ax,ay,aw,ah,bx,by,bw,bh){
+    return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+  }
+
+  // ---- Mode: MINIMAL
+  function createMinimal(){
+    const W=960, H=540; canvas.width=W; canvas.height=H;
+    const GRAV=0.7, FRICTION=0.85, MOVE=0.75, MAXVX=4.2, JUMP=-12;
+    const player = { x:60, y:0, w:18, h:28, vx:0, vy:0, onGround:false, facing:1, collected:0, deaths:0 };
+    const startPos = {x:60, y:0};
+    const platforms = [
+      {x:0, y:500, w:960, h:40},
+      {x:140, y:460, w:120, h:20},
+      {x:320, y:420, w:140, h:20},
+      {x:520, y:380, w:120, h:20},
+      {x:700, y:340, w:120, h:20},
+      {x:860, y:300, w:80,  h:20},
+      {x:460, y:200, w:18,  h:300, color:'#777'},
+      {x:610, y:200, w:18,  h:300, color:'#777'},
+      {x:485, y:200, w:110, h:18,  color:'#999'}
+    ];
+    const wallGap = {x:478, y:420, w:140, h:80};
+    const balloons = []; for(let i=0;i<10;i++){ balloons.push({x:120+i*70, y:280+Math.sin(i*0.7)*30, r:6, taken:false}); }
+    const keys={}; function onKey(e,d){ if (['ArrowLeft','ArrowRight','Space','KeyR'].includes(e.code)) e.preventDefault(); keys[e.code]=d; if (d && e.code==='Space') jump(); if (d && e.code==='KeyR') reset(); }
+    addEventListener('keydown', e=>onKey(e,true)); addEventListener('keyup', e=>onKey(e,false));
+
+    side.innerHTML = `<h2>Minimaler Prototyp</h2>
+      <p>Sammle <strong>10 Freiheit‑Ballons</strong> und erreiche den <strong>Mauer‑Durchbruch</strong>.</p>
+      <p>Steuerung: <kbd>←</kbd> <kbd>→</kbd> laufen • <kbd>Leertaste</kbd> springen • <kbd>R</kbd> zurücksetzen</p>
+      <p>Kontext: 9. November 1989 – Öffnung der Grenzübergänge in Berlin.</p>`;
+
+    function jump(){ if (player.onGround){ player.vy=JUMP; player.onGround=false; } }
+    function reset(){ player.x=startPos.x; player.y=startPos.y; player.vx=player.vy=0; player.onGround=false; player.collected=0; balloons.forEach(b=>b.taken=false); showToast('Zurückgesetzt.'); }
+    function physics(){
+      if (keys['ArrowLeft'])  { player.vx -= MOVE; player.facing=-1; }
+      if (keys['ArrowRight']) { player.vx += MOVE; player.facing= 1; }
+      player.vx *= player.onGround?FRICTION:0.98; player.vx=Math.max(-MAXVX, Math.min(MAXVX, player.vx));
+      player.vy += GRAV;
+      player.x += player.vx;
+      for (const p of platforms){
+        if (rectsIntersect(player.x,player.y,player.w,player.h,p.x,p.y,p.w,p.h)){ if (player.vx>0) player.x=p.x-player.w; else if (player.vx<0) player.x=p.x+p.w; player.vx=0; }
+      }
+      player.y += player.vy; player.onGround=false;
+      for (const p of platforms){
+        if (rectsIntersect(player.x,player.y,player.w,player.h,p.x,p.y,p.w,p.h)){
+          if (player.vy>0){ player.y=p.y-player.h; player.vy=0; player.onGround=true; }
+          else if (player.vy<0){ player.y=p.y+p.h; player.vy=0; }
+        }
+      }
+      if (player.y>H+200){ player.deaths++; showToast('Au! Versuch es erneut.'); reset(); }
+      for (const b of balloons){ if (!b.taken){ const dx=(player.x+player.w/2)-b.x, dy=(player.y+player.h/2)-b.y; if (dx*dx+dy*dy < (b.r+10)*(b.r+10)){ b.taken=true; player.collected++; showToast(`Ballon ${player.collected}/10 – Freiheit!`); } } }
+    }
+    function draw(){
+      ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#1a2a3a'; ctx.fillRect(0,0,W/2,H);
+      ctx.fillStyle='#3a2a1a'; ctx.fillRect(W/2,0,W/2,H);
+      ctx.fillStyle='#1c1c1c'; ctx.fillRect(0,500,W,40);
+      for (const p of platforms){ ctx.fillStyle=p.color||'#2a2a2a'; ctx.fillRect(p.x,p.y,p.w,p.h); ctx.fillStyle='rgba(255,255,255,0.06)'; for(let i=0;i<p.w;i+=12){ ctx.fillRect(p.x+i, p.y+((i*7)%12), 3, 3);} }
+      for (const b of balloons){ if (!b.taken){ ctx.fillStyle='#ff4d57'; ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill(); ctx.strokeStyle='#ccc'; ctx.beginPath(); ctx.moveTo(b.x,b.y+b.r); ctx.lineTo(b.x,b.y+b.r+10); ctx.stroke(); } }
+      ctx.fillStyle='#7cf1a7'; ctx.fillRect(player.x,player.y,player.w,player.h);
+      ctx.fillStyle='#cdebd2'; ctx.fillRect(player.x+4, player.y-8, 10, 8);
+      ctx.fillStyle='#000'; ctx.fillRect(player.x+(player.facing>0?12:2), player.y-6, 2, 2);
+      ctx.fillStyle='#eee'; ctx.font='14px monospace';
+      ctx.fillText('Freiheit‑Ballons: '+player.collected+'/10', 12, 20);
+      ctx.fillText('Deaths: '+player.deaths, 12, 38);
+      ctx.fillText('9. Nov 1989', W-120, 20);
+      const open = player.collected>=10;
+      ctx.strokeStyle = open? '#8cf58c' : '#eaa'; ctx.strokeRect(wallGap.x,wallGap.y,wallGap.w,wallGap.h);
+      ctx.font='12px monospace'; ctx.fillStyle=open?'#8cf58c':'#aaa'; ctx.fillText(open?'Durchbruch offen':'Sperrzone', wallGap.x+10, wallGap.y-6);
+      if (open && rectsIntersect(player.x,player.y,player.w,player.h, wallGap.x,wallGap.y,wallGap.w,wallGap.h)){
+        ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,W,H);
+        ctx.fillStyle='#8cf58c'; ctx.font='24px monospace';
+        ctx.fillText('9. November 1989 – Die Mauer ist offen!', 140, H/2 - 12);
+        ctx.fillStyle='#eee'; ctx.font='14px monospace'; ctx.fillText('Projektziel erreicht – Glückwunsch!', 280, H/2 + 12);
+      }
+    }
+    let id=0; function loop(){ physics(); draw(); id=requestAnimationFrame(loop); }
+    const api = { start(){ loop(); showToast('Sammle 10 Ballons und laufe durch den Durchbruch!'); },
+                  destroy(){ cancelAnimationFrame(id); removeEventListener('keydown', onKeyWrap); removeEventListener('keyup', onKeyWrapUp); } };
+    // Wraps to be removable
+    function onKeyWrap(e){ onKey(e,true); }
+    function onKeyWrapUp(e){ onKey(e,false); }
+    // Rebind with named fns so we can remove
+    removeEventListener('keydown', onKeyWrap);
+    removeEventListener('keyup', onKeyWrapUp);
+    addEventListener('keydown', onKeyWrap);
+    addEventListener('keyup', onKeyWrapUp);
+    return api;
+  }
+
+  // ---- Mode: CLASSIC
+  function createClassic(){
+    const W=960,H=540; canvas.width=W; canvas.height=H;
+    const GRAV=0.7, MOVE=0.8, MAXVX=4.0, JUMP=-12, FRICTION=0.86;
+    const world={ w:3200, h:H }; const camera={ x:0 };
+    const player={ x:60,y:0,w:18,h:28,vx:0,vy:0,facing:1,onGround:false,visas:0,deaths:0,checkpoint:{x:60,y:0} };
+    const platforms=[]; platforms.push({x:0,y:500,w:world.w,h:40}); for(let i=0;i<20;i++){ platforms.push({x:120+i*140, y:470-(i%5)*40, w:100, h:16}); }
+    const wall={x:1500,y:220,w:20,h:280}; const wallTop={x:1340,y:220,w:360,h:16}; platforms.push(wall, wallTop);
+    const phones=[ {x:600,y:435,w:18,h:65,saved:false}, {x:1800,y:435,w:18,h:65,saved:false}, {x:2700,y:435,w:18,h:65,saved:false} ];
+    const enemies=[ {x:800,y:484,w:20,h:16,dir:1,min:740,max:940,speed:1.2}, {x:1200,y:444,w:20,h:16,dir:1,min:1180,max:1320,speed:1.1}, {x:2000,y:404,w:20,h:16,dir:1,min:1980,max:2120,speed:1.3} ];
+    const visas=[]; for(let i=0;i<15;i++){ visas.push({x:220+i*180, y:320-(i%3)*40, r:6, taken:false}); }
+
+    side.innerHTML = `<h2>Classic Scroller</h2>
+      <p>Ziel: Vom Osten (links) in den Westen (rechts). Sammle <strong>15 Ausreisevisa</strong>, aktiviere <strong>Telefonzellen</strong> als Checkpoints, meide <strong>Patrouillen</strong>.</p>
+      <p>Steuerung: <kbd>←</kbd> <kbd>→</kbd>, <kbd>Leertaste</kbd>, <kbd>R</kbd>.</p>`;
+
+    const keys={}; function onKey(e,d){ if (['ArrowLeft','ArrowRight','Space','KeyR'].includes(e.code)) e.preventDefault(); keys[e.code]=d; if (d && e.code==='Space') jump(); if (d && e.code==='KeyR') respawn(); }
+    addEventListener('keydown', onKeyWrap); addEventListener('keyup', onKeyWrapUp);
+    function onKeyWrap(e){ onKey(e,true); } function onKeyWrapUp(e){ onKey(e,false); }
+
+    function respawn(){ player.x=player.checkpoint.x; player.y=player.checkpoint.y; player.vx=player.vy=0; player.onGround=false; showToast('Zurück zum letzten Checkpoint.'); }
+    function jump(){ if (player.onGround){ player.vy=JUMP; player.onGround=false; } }
+    function collideRect(ax,ay,aw,ah,b){ return ax < b.x+b.w && ax+aw > b.x && ay < b.y+b.h && ay+ah > b.y; }
+
+    function physics(){
+      if (keys['ArrowLeft']) { player.vx -= MOVE; player.facing=-1; }
+      if (keys['ArrowRight']){ player.vx += MOVE; player.facing= 1; }
+      player.vx *= player.onGround?FRICTION:0.98; player.vx=Math.max(-MAXVX, Math.min(MAXVX, player.vx));
+      player.vy += GRAV;
+
+      player.x += player.vx;
+      for (const p of platforms){ if (collideRect(player.x,player.y,player.w,player.h,p)){ if (player.vx>0) player.x=p.x-player.w; else if (player.vx<0) player.x=p.x+p.w; player.vx=0; } }
+      player.y += player.vy; player.onGround=false;
+      for (const p of platforms){ if (collideRect(player.x,player.y,player.w,player.h,p)){ if (player.vy>0){ player.y=p.y-player.h; player.vy=0; player.onGround=true; } else if (player.vy<0){ player.y=p.y+p.h; player.vy=0; } } }
+
+      for (const e of enemies){ e.x += e.dir*e.speed; if (e.x<e.min || e.x>e.max) e.dir*=-1; if (collideRect(player.x,player.y,player.w,player.h,e)){ player.deaths++; respawn(); } }
+      for (const v of visas){ if (!v.taken){ const dx=(player.x+player.w/2)-v.x, dy=(player.y+player.h/2)-v.y; if (dx*dx+dy*dy < (v.r+10)*(v.r+10)){ v.taken=true; player.visas++; showToast(`Ausreisevisa ${player.visas}/15 gesichert.`);} } }
+      for (const ph of phones){ if (collideRect(player.x,player.y,player.w,player.h,ph) && !ph.saved){ ph.saved=true; player.checkpoint={x:ph.x, y:ph.y-40}; showToast('Checkpoint gespeichert.'); } }
+      if (player.y>H+400){ player.deaths++; respawn(); }
+      camera.x = Math.max(0, Math.min(world.w - W, player.x - W/2));
+    }
+    function draw(){
+      const ox=Math.floor(camera.x);
+      ctx.fillStyle='#152235'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle='#0e1726'; for (let i=0;i<40;i++){ const bx=(i*180 - ox*0.5)%(W+400)-200; ctx.fillRect(bx, 260+(i%5)*10, 80, 200); }
+      ctx.fillStyle='#1b1b1b'; ctx.fillRect(-ox,500,world.w,40);
+      for (const p of platforms){ ctx.fillStyle=(p===wall||p===wallTop)?'#777':'#2a2a2a'; ctx.fillRect(p.x-ox,p.y,p.w,p.h); }
+      const open = player.visas>=15; ctx.strokeStyle=open?'#7bf58a':'#eaa';
+      const gap={x:wall.x-ox-10, y:420, w:40, h:80}; ctx.strokeRect(gap.x,gap.y,gap.w,gap.h);
+      ctx.fillStyle=open?'#7bf58a':'#aaa'; ctx.font='12px monospace'; ctx.fillText(open?'Übergang offen':'Grenzübergang gesperrt', gap.x-12, gap.y-6);
+      for (const ph of phones){ ctx.fillStyle=ph.saved?'#58a6ff':'#3a85ff'; ctx.fillRect(ph.x-ox,ph.y,ph.w,ph.h); ctx.fillStyle='#fff'; ctx.fillRect(ph.x-ox+3, ph.y+6, ph.w-6, 10); }
+      for (const e of enemies){ ctx.fillStyle='#ff5a5a'; ctx.fillRect(e.x-ox,e.y,e.w,e.h); ctx.fillStyle='#000'; ctx.fillRect(e.x-ox+4,e.y+4,4,4); }
+      for (const v of visas){ if (!v.taken){ ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(v.x-ox, v.y, v.r, 0, Math.PI*2); ctx.fill(); ctx.fillStyle='#000'; ctx.font='10px monospace'; ctx.fillText('V', v.x-ox-3, v.y+3); } }
+      ctx.fillStyle='#7cf1a7'; ctx.fillRect(player.x-ox,player.y,player.w,player.h);
+      ctx.fillStyle='#cdebd2'; ctx.fillRect(player.x-ox+4, player.y-8, 10, 8);
+      ctx.fillStyle='#000'; ctx.fillRect(player.x-ox+(player.facing>0?12:2), player.y-6, 2, 2);
+      ctx.fillStyle='#eee'; ctx.font='14px monospace'; ctx.fillText(`Visa: ${player.visas}/15`, 12, 20); ctx.fillText(`Deaths: ${player.deaths}`, 12, 38); ctx.fillText('Ziel: Brandenburger Tor ➜', W-240, 20);
+      if (open && player.x > world.w-120){ ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,W,H); ctx.fillStyle='#8cf58c'; ctx.font='24px monospace'; ctx.fillText('Mauerfall geschafft – Willkommen im Westen!', 130, H/2 - 12); ctx.fillStyle='#eee'; ctx.font='14px monospace'; ctx.fillText('Historischer Kontext: 9.11.1989 – Grenzöffnung in Berlin.', 210, H/2 + 12); }
+    }
+    let id=0; function loop(){ physics(); draw(); id=requestAnimationFrame(loop); }
+    return { start(){ loop(); showToast('Sammle 15 Visa, sichere Checkpoints, erreiche das Tor!'); },
+             destroy(){ cancelAnimationFrame(id); removeEventListener('keydown', onKeyWrap); removeEventListener('keyup', onKeyWrapUp); } };
+  }
+
+  // ---- Mode: STORY
+  function createStory(){
+    const W=1024,H=576; canvas.width=W; canvas.height=H;
+    const world={ w:4200, h:H }; const cam={ x:0 };
+    const GRAV=0.7, MOVE=0.85, MAXVX=4.2, JUMP=-12, FRICTION=0.86;
+    const player={ x:40,y:0,w:18,h:28,vx:0,vy:0,facing:1,onGround:false,papers:0,deaths:0,year:1961,checkpoint:{x:40,y:0} };
+
+    const beats=[
+      {x:200,  text:'1961: Bau der Berliner Mauer. Stadt wird geteilt.'},
+      {x:1200, text:'1987: „Mr. Gorbachev, tear down this wall!“ – Reagan.'},
+      {x:2200, text:'1989: Friedliche Montagsdemonstrationen, Leipzig & Berlin.'},
+      {x:3100, text:'9. Nov 1989: Reiseverordnung – Grenzübergänge öffnen.'},
+    ]; const shown=new Set();
+
+    const platforms=[]; platforms.push({x:0,y:H-60,w:world.w,h:60}); for(let i=0;i<30;i++){ platforms.push({x:160+i*120, y:H-100-(i%4)*30, w:90, h:14}); }
+    const wall={x:1950,y:180,w:24,h:H-180}; const wallTop={x:1750,y:180,w:420,h:16}; platforms.push(wall, wallTop);
+    const gateX=world.w-220;
+    const banners=[ {x:800,y:H-125,w:16,h:70,saved:false,label:'„Wir sind das Volk“'}, {x:2400,y:H-125,w:16,h:70,saved:false,label:'„Freiheit“'}, {x:3400,y:H-125,w:16,h:70,saved:false,label:'„Keine Gewalt“'} ];
+    const enemies=[ {x:900,y:H-76,w:20,h:16,dir:1,min:860,max:1040,speed:1.25}, {x:1600,y:H-136,w:20,h:16,dir:-1,min:1500,max:1700,speed:1.2}, {x:2600,y:H-166,w:20,h:16,dir:1,min:2580,max:2720,speed:1.35}, {x:3200,y:H-196,w:20,h:16,dir:-1,min:3160,max:3320,speed:1.25} ];
+    const papers=[]; for(let i=0;i<20;i++){ papers.push({x:180+i*180, y:H-160-(i%5)*24, r:6, taken:false}); }
+
+    side.innerHTML = `<h2>Story Edition</h2>
+      <p>Sammle <strong>Mut‑Zeitungen</strong>, aktiviere <strong>Banner</strong> (Checkpoints), meide <strong>Patrouillen</strong>, erreiche das <strong>Brandenburger Tor</strong>.</p>
+      <p>Timeline‑Einblendungen begleiten die historische Einordnung.</p>`;
+
+    const keys={}; function onKey(e,d){ if (['ArrowLeft','ArrowRight','Space','KeyR'].includes(e.code)) e.preventDefault(); keys[e.code]=d; if (d && e.code==='Space') jump(); if (d && e.code==='KeyR') respawn(); }
+    addEventListener('keydown', onKeyWrap); addEventListener('keyup', onKeyWrapUp);
+    function onKeyWrap(e){ onKey(e,true); } function onKeyWrapUp(e){ onKey(e,false); }
+
+    function respawn(){ player.x=player.checkpoint.x; player.y=player.checkpoint.y; player.vx=player.vy=0; player.onGround=false; showToast('Zurück zum letzten Banner.'); }
+    function jump(){ if (player.onGround){ player.vy=JUMP; player.onGround=false; } }
+    function collide(ax,ay,aw,ah,b){ return ax < b.x+b.w && ax+aw > b.x && ay < b.y+b.h && ay+ah > b.y; }
+
+    function physics(){
+      if (keys['ArrowLeft']) { player.vx -= MOVE; player.facing=-1; }
+      if (keys['ArrowRight']){ player.vx += MOVE; player.facing= 1; }
+      player.vx *= player.onGround?FRICTION:0.98; player.vx=Math.max(-MAXVX, Math.min(MAXVX, player.vx));
+      player.vy += GRAV;
+      player.x += player.vx;
+      for (const p of platforms){ if (collide(player.x,player.y,player.w,player.h,p)){ if (player.vx>0) player.x=p.x-player.w; else if (player.vx<0) player.x=p.x+p.w; player.vx=0; } }
+      player.y += player.vy; player.onGround=false;
+      for (const p of platforms){ if (collide(player.x,player.y,player.w,player.h,p)){ if (player.vy>0){ player.y=p.y-player.h; player.vy=0; player.onGround=true; } else if (player.vy<0){ player.y=p.y+p.h; player.vy=0; } } }
+      for (const e of enemies){ e.x += e.dir*e.speed; if (e.x<e.min || e.x>e.max) e.dir*=-1; if (collide(player.x,player.y,player.w,player.h,e)){ player.deaths++; respawn(); } }
+      for (const p of papers){ if (!p.taken){ const dx=(player.x+player.w/2)-p.x, dy=(player.y+player.h/2)-p.y; if (dx*dx+dy*dy < (p.r+10)*(p.r+10)){ p.taken=true; player.papers++; if (player.papers>=5) player.year=1987; if (player.papers>=10) player.year=1989; if (player.papers>=15) player.year=1989; showToast(`Mut‑Zeitung ${player.papers}/20 gesammelt.`);} } }
+      for (const b of banners){ if (collide(player.x,player.y,player.w,player.h,b) && !b.saved){ b.saved=true; player.checkpoint={x:b.x, y:b.y-40}; showToast(`Banner aktiviert: ${b.label}`); } }
+      for (const beat of beats){ if (player.x>beat.x && !shown.has(beat.x)){ shown.add(beat.x); showToast(beat.text, 240); } }
+      if (player.y>H+400){ player.deaths++; respawn(); }
+      cam.x = Math.max(0, Math.min(world.w - W, player.x - W/2));
+    }
+    function draw(){
+      const ox=Math.floor(cam.x);
+      ctx.fillStyle='#0b0f14'; ctx.fillRect(0,0,W,H);
+      for (let i=0;i<80;i++){ const sx=(i*53 - ox*0.2)%(W+300)-100; const sy=(i*37)%H; ctx.fillStyle = i%9===0? '#99ddff':'#8899aa'; ctx.fillRect(sx,sy,2,2); }
+      ctx.fillStyle='#131c2a'; for (let i=0;i<50;i++){ const bx=(i*200 - ox*0.5)%(W+500)-250; ctx.fillRect(bx, 260+(i%6)*12, 90, 280); }
+      for (const p of platforms){ ctx.fillStyle=(p===wall||p===wallTop)?'#777':'#262b34'; ctx.fillRect(p.x-ox,p.y,p.w,p.h); }
+      const open = player.papers>=20 || banners.every(b=>b.saved);
+      ctx.strokeStyle=open?'#7bf58a':'#eaa'; const gap={x:wall.x-ox-12, y:H-130, w:48, h:90}; ctx.strokeRect(gap.x,gap.y,gap.w,gap.h);
+      ctx.font='12px monospace'; ctx.fillStyle=open?'#7bf58a':'#aaa'; ctx.fillText(open?'Durchbruch offen':'Grenze geschlossen', gap.x-8, gap.y-6);
+      for (const b of banners){ ctx.fillStyle=b.saved?'#ffe066':'#ffd166'; ctx.fillRect(b.x-ox,b.y,b.w,b.h); ctx.fillStyle='#000'; ctx.font='10px monospace'; ctx.fillText('✊', b.x-ox-2, b.y+12); }
+      for (const e of enemies){ ctx.fillStyle='#ff5a5a'; ctx.fillRect(e.x-ox,e.y,e.w,e.h); ctx.fillStyle='#000'; ctx.fillRect(e.x-ox+4,e.y+4,4,4); }
+      for (const p of papers){ if (!p.taken){ ctx.fillStyle='#a0e7e5'; ctx.beginPath(); ctx.arc(p.x-ox,p.y,p.r,0,Math.PI*2); ctx.fill(); ctx.fillStyle='#000'; ctx.font='10px monospace'; ctx.fillText('Z', p.x-ox-3, p.y+3); } }
+      ctx.fillStyle='#c0aa88'; ctx.fillRect(gateX-ox, H-160, 140, 120); ctx.fillStyle='#a0896f'; for (let i=0;i<5;i++){ ctx.fillRect(gateX-ox+10+i*25, H-160, 12, 80); }
+      ctx.fillStyle='#7cf1a7'; ctx.fillRect(player.x-ox,player.y,player.w,player.h);
+      ctx.fillStyle='#cdebd2'; ctx.fillRect(player.x-ox+4, player.y-8, 10, 8);
+      ctx.fillStyle='#000'; ctx.fillRect(player.x-ox+(player.facing>0?12:2), player.y-6, 2, 2);
+      ctx.fillStyle='#eee'; ctx.font='14px monospace';
+      ctx.fillText(`Zeitungen: ${player.papers}/20`, 12, 20); ctx.fillText(`Deaths: ${player.deaths}`, 12, 38); ctx.fillText(`Jahr: ${player.year}`, 12, 56);
+      if (open && player.x > gateX+40){ ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,W,H); ctx.fillStyle='#8cf58c'; ctx.font='24px monospace'; ctx.fillText('Friedliche Revolution – Mauerfall erreicht!', 180, H/2 - 14); ctx.fillStyle='#eee'; ctx.font='14px monospace'; ctx.fillText('„Wir sind ein Volk“ – 9. November 1989', 320, H/2 + 16); }
+    }
+    let id=0; function loop(){ physics(); draw(); id=requestAnimationFrame(loop); }
+    return { start(){ loop(); showToast('Sammle Mut, aktiviere Banner, meide Patrouillen, erreiche das Tor.'); },
+             destroy(){ cancelAnimationFrame(id); removeEventListener('keydown', onKeyWrap); removeEventListener('keyup', onKeyWrapUp); } };
+  }
+
+  function boot(mode){
+    if (current && current.destroy) current.destroy();
+    if (mode==='classic') current=createClassic();
+    else if (mode==='story') current=createStory();
+    else current=createMinimal();
+    current.start();
+  }
+
+  modeSel.addEventListener('change', () => boot(modeSel.value));
+  restartBtn.addEventListener('click', () => boot(modeSel.value));
+
+  // Initial boot
+  boot('minimal');
+})();
+</script>
+</body>
+</html>
